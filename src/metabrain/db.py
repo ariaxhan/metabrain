@@ -6,7 +6,7 @@ A thin, typed wrapper over a single SQLite file. Design goals:
   subprocess, no required CLI.
 - **Zero dependencies.** Only the standard-library ``sqlite3``.
 - **Deterministic population.** Using the API correctly fills every table as a
-  side effect — sessions on open, events on every write, hypotheses and
+  side effect, sessions on open, events on every write, hypotheses and
   experiments as the learn/verdict loop turns. Nothing relies on the caller
   remembering to log.
 - **Safe under concurrency.** WAL plus ``busy_timeout`` let multiple agent
@@ -20,7 +20,7 @@ The loop is the point::
         →  graduates to a hypothesis (status: testing)
         →  each verdict on it is an experiment (supports / refutes)
         →  confidence ≥ graduate_at over a min sample
-        →  re-emitted as a learning of type 'preference' — a *proven* rule.
+        →  re-emitted as a learning of type 'preference', a *proven* rule.
 
 That is what separates metabrain from a store that only remembers what you told
 it: it discovers what actually works and promotes it.
@@ -54,7 +54,7 @@ _VERDICTS = frozenset({"pass", "fail"})
 _UNIT_KINDS = frozenset({"spec", "contract"})
 
 # Thresholds, mined from 5,066 real learnings (not guessed):
-#   hit_count sits at 1-2 for 57% of patterns, then drops sharply — the
+#   hit_count sits at 1-2 for 57% of patterns, then drops sharply, the
 #   recurring tail begins at 3. So a pattern observed 3× is worth testing.
 DEFAULT_PROMOTE_AT = 3
 #   confidence has no historical data (experiments never ran in the bash era),
@@ -76,6 +76,22 @@ def _new_id(prefix: str) -> str:
     return f"{prefix}_{uuid.uuid4().hex[:12]}"
 
 
+def _new_memory_event_id(source_db: str | None) -> str:
+    """A globally-unique memory_events id shaped ``<db-short>-<ts>-<rand>``.
+
+    The short tag is the origin db's basename when known, so an event id is
+    self-describing across federated stores; the ts + random suffix guarantee
+    uniqueness even for many events in the same millisecond.
+    """
+    short = "local"
+    if source_db:
+        base = Path(source_db).name or source_db
+        cleaned = "".join(c for c in base if c.isalnum() or c in "-_")
+        short = cleaned[:16] or "local"
+    ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+    return f"{short}-{ts}-{uuid.uuid4().hex[:8]}"
+
+
 def _dump(content: Any) -> str:
     """Serialize a payload to JSON; strings pass through so callers can store text."""
     if isinstance(content, str):
@@ -94,7 +110,7 @@ class MetaBrain:
             ...
         brief = db.read_start()           # proven preferences first
 
-    The flat API works without a session too — writes attach to a lazily-opened
+    The flat API works without a session too, writes attach to a lazily-opened
     *ambient* session, so ``sessions`` and ``events`` still populate::
 
         db.learn("gotcha", "WAL needed for concurrent agents", domain="db")
@@ -175,6 +191,49 @@ class MetaBrain:
             (_now(), session_id, kind, ref_id, _dump(data) if data is not None else None),
         )
 
+    def _emit_memory_event(
+        self,
+        kind: str,
+        *,
+        subject_id: str | None = None,
+        object_id: str | None = None,
+        actor: str | None = None,
+        source_db: str | None = None,
+        source_row_id: str | None = None,
+        import_batch_id: str | None = None,
+        reason: str | None = None,
+        inference_method: str | None = None,
+        payload: Any = None,
+    ) -> str:
+        """Append an observation to the append-only ``memory_events`` spine.
+
+        This is the memory-lifecycle log (design section 2): the ground truth the
+        derived caches (hit_count, domain, archived state) are recomputed from.
+        Never UPDATE, never DELETE; a correction is a new event. Returns the id.
+        """
+        event_id = _new_memory_event_id(source_db)
+        self._execute(
+            """INSERT INTO memory_events
+               (event_id, ts, schema_version, kind, actor, source_db, source_row_id,
+                import_batch_id, subject_id, object_id, reason, inference_method, payload)
+               VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                event_id,
+                _now(),
+                kind,
+                actor,
+                source_db,
+                source_row_id,
+                import_batch_id,
+                subject_id,
+                object_id,
+                reason,
+                inference_method,
+                _dump(payload) if payload is not None else None,
+            ),
+        )
+        return event_id
+
     # -- sessions ----------------------------------------------------------
 
     def session(
@@ -251,43 +310,134 @@ class MetaBrain:
         visibility: str = "agent",
         sensitivity: str = "low",
         session_id: str | None = None,
+        hit_count: int | None = None,
+        last_hit: str | None = None,
+        source_db: str | None = None,
+        source_row_id: str | None = None,
+        import_batch_id: str | None = None,
     ) -> Learning:
         """Record (or reinforce) a durable lesson.
 
         Re-learning an identical ``(type, insight)`` bumps its ``hit_count``
-        rather than inserting a duplicate — the same forcing function as
-        :meth:`recall`. When a ``pattern`` crosses ``promote_at`` it graduates
+        rather than inserting a duplicate, the same forcing function as
+        :meth:`recall`. When a learning crosses ``promote_at`` it graduates
         into a hypothesis automatically.
+
+        The observatory params make an import lossless and replayable (design
+        1.1, 3.1/3.2). ``hit_count``/``last_hit`` seed the row with the source's
+        real observed reinforcement instead of resetting it to 1. The provenance
+        (``source_db``/``source_row_id``/``import_batch_id``) is stamped on the
+        row and recorded in the origin ``memory_events`` observation, so the seed
+        is an OBSERVATION, not a bare scalar. Passing any provenance marks the
+        call an import: its origin event is ``imported`` and an exact-string
+        collision becomes a ``merged`` event (both provenance chains, SUM rule),
+        never a silent ``+1`` or ``MAX``.
         """
         if type not in _LEARNING_TYPES:
             raise ValueError(f"type must be one of {sorted(_LEARNING_TYPES)}, got {type!r}")
         if not insight or not insight.strip():
             raise ValueError("insight must be a non-empty string")
         sid = self._sid(session_id)
+        is_import = bool(import_batch_id or source_db or source_row_id)
+        seed_count = hit_count if hit_count is not None else 1
+        if seed_count < 1:
+            seed_count = 1
         existing = self._query(
             "SELECT * FROM learnings WHERE type = ? AND insight = ? LIMIT 1", (type, insight)
         )
         if existing:
             row = existing[0]
-            self._execute(
-                """UPDATE learnings
-                   SET hit_count = hit_count + 1, last_hit = ?,
-                       evidence = COALESCE(?, evidence), domain = COALESCE(?, domain)
-                   WHERE id = ?""",
-                (_now(), evidence, domain, row["id"]),
-            )
+            now = last_hit or _now()
+            if is_import:
+                # Two distinct source rows with the identical insight collapse
+                # into one: a MERGE, not a silent +1 and not a MAX. Preserve both
+                # provenance chains + both observed counts in the event, and SUM
+                # the reinforcement into the survivor (design 3.1 / 2.2). The
+                # survivor is always the live existing row, so a chain cannot
+                # form (every collision resolves to this single surviving id).
+                survivor_seed = row["hit_count"]
+                merged_count = survivor_seed + seed_count
+                self._emit_memory_event(
+                    "merged",
+                    subject_id=row["id"],
+                    object_id=source_row_id,
+                    actor="metabrain-import",
+                    source_db=source_db,
+                    source_row_id=source_row_id,
+                    import_batch_id=import_batch_id,
+                    reason="exact-string dedup collision on import",
+                    payload={
+                        "survivor": {
+                            "source_db": row["source_db"],
+                            "source_row_id": row["source_row_id"],
+                            "observed_hit_count": survivor_seed,
+                        },
+                        "merged_away": {
+                            "source_db": source_db,
+                            "source_row_id": source_row_id,
+                            "observed_hit_count": seed_count,
+                        },
+                    },
+                )
+                self._execute(
+                    """UPDATE learnings
+                       SET hit_count = ?, last_hit = ?,
+                           evidence = COALESCE(?, evidence), domain = COALESCE(?, domain)
+                       WHERE id = ?""",
+                    (merged_count, now, evidence, domain, row["id"]),
+                )
+            else:
+                # A live re-learn of the identical insight is a genuine
+                # reinforcement: bump by one and record it as an observation so
+                # hit_count stays replayable event-by-event going forward.
+                self._execute(
+                    """UPDATE learnings
+                       SET hit_count = hit_count + 1, last_hit = ?,
+                           evidence = COALESCE(?, evidence), domain = COALESCE(?, domain)
+                       WHERE id = ?""",
+                    (now, evidence, domain, row["id"]),
+                )
+                self._emit_memory_event(
+                    "reinforced",
+                    subject_id=row["id"],
+                    actor=self.agent,
+                    reason="live re-learn of identical insight",
+                )
             self._emit("learn", session_id=sid, ref_id=row["id"], data={"reinforced": True})
             self._maybe_promote(row["id"])
             return self.get_learning(row["id"])  # type: ignore[return-value]
 
         lid = _new_id("learn")
         now = _now()
+        seed_last_hit = last_hit or now
         self._execute(
             """INSERT INTO learnings
                (id, ts, session_id, type, insight, evidence, domain,
-                hit_count, last_hit, visibility, sensitivity)
-               VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)""",
-            (lid, now, sid, type, insight, evidence, domain, now, visibility, sensitivity),
+                hit_count, last_hit, visibility, sensitivity,
+                source_db, source_row_id, import_batch_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                lid, now, sid, type, insight, evidence, domain,
+                seed_count, seed_last_hit, visibility, sensitivity,
+                source_db, source_row_id, import_batch_id,
+            ),
+        )
+        # Origin observation: the seed hit_count recorded AS AN EVENT (design 1.1,
+        # kill 1). 'imported' for a rebuild import, 'created' for a live learn.
+        self._emit_memory_event(
+            "imported" if is_import else "created",
+            subject_id=lid,
+            actor="metabrain-import" if is_import else self.agent,
+            source_db=source_db,
+            source_row_id=source_row_id,
+            import_batch_id=import_batch_id,
+            reason="seed import of pre-repair hit_count" if is_import else "live learn",
+            inference_method=(
+                "seed: pre-repair hit_count, no per-event history available"
+                if is_import
+                else None
+            ),
+            payload={"observed_hit_count": seed_count, "type": type, "domain": domain},
         )
         self._emit("learn", session_id=sid, ref_id=lid, data={"type": type})
         self._maybe_promote(lid)
@@ -322,7 +472,7 @@ class MetaBrain:
         """Search learnings by substring across insight and evidence.
 
         Matches have their ``hit_count`` bumped and ``last_hit`` stamped, so a
-        frequently-useful pattern surfaces its value over time — and may cross
+        frequently-useful pattern surfaces its value over time, and may cross
         ``promote_at`` and graduate to a hypothesis as a result.
         """
         sid = self._sid(session_id)
@@ -359,14 +509,19 @@ class MetaBrain:
     # -- the loop, stage 1: pattern → hypothesis ---------------------------
 
     def _maybe_promote(self, learning_id: str) -> None:
-        """Graduate a recurring ``pattern`` into a hypothesis once it crosses the bar."""
+        """Graduate a recurring learning into a hypothesis once it crosses the bar.
+
+        The old ``type == 'pattern'`` hard gate is removed (design 3.4): a
+        recurring gotcha or failure is exactly what a "do not repeat this" memory
+        should promote. The uniform ``promote_at`` threshold applies to every
+        type; per-type thresholds are deliberately out of scope (Appendix A).
+        """
         rows = self._query("SELECT * FROM learnings WHERE id = ?", (learning_id,))
         if not rows:
             return
         row = rows[0]
         if (
-            row["type"] != "pattern"
-            or row["hit_count"] < self.promote_at
+            row["hit_count"] < self.promote_at
             or row["hypothesis_id"] is not None
         ):
             return
@@ -384,7 +539,7 @@ class MetaBrain:
             "graduate",
             session_id=row["session_id"],
             ref_id=hid,
-            data={"from": "pattern", "to": "hypothesis", "learning_id": row["id"]},
+            data={"from": row["type"], "to": "hypothesis", "learning_id": row["id"]},
         )
 
     def hypotheses(self, *, status: str | None = None, limit: int = 50) -> list[Hypothesis]:
@@ -753,8 +908,8 @@ class MetaBrain:
     def read_start(self, *, learnings_limit: int = 20) -> StartBrief:
         """Build the "what to know before working" digest.
 
-        Proven ``preferences`` come first — the rules metabrain earned through the
-        loop — then recent learnings, hypotheses still under test, open units
+        Proven ``preferences`` come first, the rules metabrain earned through the
+        loop, then recent learnings, hypotheses still under test, open units
         without a verdict, the latest checkpoint, and recent errors.
         """
         preferences = self.learnings(type="preference", limit=learnings_limit)
@@ -801,7 +956,7 @@ class MetaBrain:
         """Trim checkpoint history to the most recent ``keep`` entries.
 
         Units, handoffs, verdicts, learnings, hypotheses, and experiments are
-        never pruned — only the high-churn checkpoint trail. Returns the count
+        never pruned, only the high-churn checkpoint trail. Returns the count
         deleted.
         """
         cur = self._execute(
@@ -815,7 +970,7 @@ class MetaBrain:
         return cur.rowcount
 
     def stats(self) -> dict[str, int]:
-        """Row counts per table — a quick health check that the loop is turning."""
+        """Row counts per table, a quick health check that the loop is turning."""
         out: dict[str, int] = {}
         for table in (
             "sessions",
