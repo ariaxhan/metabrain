@@ -2,7 +2,7 @@
 its implementation, so the schema can evolve underneath them.
 
 The headline tests are the loop (``test_full_loop_*``) and the three target use
-cases (content / lead capture / job applications) — those are what metabrain
+cases (content / lead capture / job applications), those are what metabrain
 exists to do, so they are tested as first-class behaviour.
 """
 
@@ -105,11 +105,16 @@ def test_recall_can_trigger_graduation(tmp_path):
     db.close()
 
 
-def test_only_patterns_graduate(tmp_path):
+def test_all_types_graduate_at_uniform_threshold(tmp_path):
+    # design 3.4: the type=='pattern' hard gate is removed, so a recurring
+    # gotcha (or failure) graduates at the same uniform promote_at as a pattern.
+    # A recurring "do not repeat this mistake" is exactly what should promote.
     db = MetaBrain(tmp_path / "a.db", promote_at=2)
-    for _ in range(3):
-        db.learn("gotcha", "not a pattern")
-    assert db.hypotheses() == []
+    for _ in range(2):
+        db.learn("gotcha", "recurring gotcha worth promoting")
+    hyps = db.hypotheses()
+    assert len(hyps) == 1
+    assert hyps[0].statement == "recurring gotcha worth promoting"
     db.close()
 
 
@@ -412,7 +417,7 @@ def test_opens_and_migrates_legacy_database(tmp_path):
 
 def test_use_case_content_engine(tmp_path):
     """A pattern about what drives engagement gets proven by post outcomes and
-    graduates into the brand's playbook — replacing maerai's patterns.json."""
+    graduates into the brand's playbook, replacing maerai's patterns.json."""
     db = MetaBrain(tmp_path / "content.db", promote_at=2, min_experiments=3, graduate_at=0.66)
     with db.session(task="content", agent="maerai") as s:
         s.learn("pattern", "question hooks lift saves", domain="instagram")

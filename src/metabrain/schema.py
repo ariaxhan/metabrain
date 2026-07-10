@@ -10,7 +10,7 @@ write path can.
 - ``events``       append-only telemetry. Every write method emits one, so the
   event log is a complete, automatic trace of what the agent did.
 - ``learnings``    cross-session memory. ``preference`` rows are special: they
-  are *graduated* — proven by evidence, not merely asserted.
+  are *graduated*, proven by evidence, not merely asserted.
 - ``context``      work state: ``unit`` (a spec/contract), plus the
   ``checkpoint`` / ``handoff`` / ``verdict`` entries that hang off it.
 - ``hypotheses``   the self-improving loop, stage 1. A ``pattern`` learning that
@@ -23,7 +23,7 @@ The loop ``learnings → hypotheses → experiments → learnings(preference)`` 
 thing that separates metabrain from a plain memory store: it does not just
 remember what you told it, it discovers what actually works and promotes it.
 
-Types are validated against a *default* vocabulary but are **open** — live data
+Types are validated against a *default* vocabulary but are **open**, live data
 from the bash era already contained out-of-constraint types, so the columns use
 no closed ``CHECK`` set. Callers extend the vocabulary without forking.
 
@@ -46,7 +46,7 @@ class IncompatibleDatabaseError(RuntimeError):
     """
 
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 _PRAGMAS = """
 PRAGMA journal_mode=WAL;
@@ -95,7 +95,12 @@ CREATE TABLE IF NOT EXISTS learnings (
   last_hit      TEXT,
   hypothesis_id TEXT,               -- set when this pattern graduated to a hypothesis
   visibility    TEXT NOT NULL DEFAULT 'agent',
-  sensitivity   TEXT NOT NULL DEFAULT 'low'
+  sensitivity   TEXT NOT NULL DEFAULT 'low',
+  source_db       TEXT,             -- provenance: origin db (import), null for a live learn
+  source_row_id   TEXT,             -- provenance: id of the row in its origin db
+  import_batch_id TEXT,             -- provenance: the import run that created this row
+  archived_at     TEXT,             -- derived cache of the latest archived/resurrected event
+  archived_reason TEXT              -- derived cache: why it was archived
 );
 
 -- Work state: units (specs/contracts) and the entries that hang off them.
@@ -152,6 +157,26 @@ CREATE TABLE IF NOT EXISTS errors (
   domain     TEXT
 );
 
+-- The memory-lifecycle observation spine (schema v3, the memory observatory).
+-- Append-only: never UPDATE, never DELETE. A correction is a NEW event
+-- (kind='superseded'/'merged'). Derived caches (hit_count, domain, archived_at)
+-- are functions of this log; the log is the ground truth (design 1.1, R4).
+CREATE TABLE IF NOT EXISTS memory_events (
+  event_id         TEXT PRIMARY KEY,           -- <db-short>-<ts>-<rand>, globally unique
+  ts               TEXT NOT NULL,              -- ISO-8601 UTC, event time
+  schema_version   INTEGER NOT NULL DEFAULT 1, -- bump only on shape change
+  kind             TEXT NOT NULL,              -- OPEN vocabulary, no CHECK
+  actor            TEXT,                       -- session id | script name | hook | 'metabrain-import'
+  source_db        TEXT,                       -- logical name / realpath of the origin db
+  source_row_id    TEXT,                       -- id of the row in its ORIGIN db (survives import)
+  import_batch_id  TEXT,                       -- set on imported/merged events; null in-place
+  subject_id       TEXT,                       -- the learning/hypothesis this event is about
+  object_id        TEXT,                       -- the OTHER row, for merged/superseded/graduated
+  reason           TEXT,                       -- why this happened
+  inference_method TEXT,                       -- null = directly observed; set = derived/seed
+  payload          TEXT                        -- JSON: observed_hit_count, both-side merge values, etc.
+);
+
 CREATE TABLE IF NOT EXISTS _migrations (
   version    INTEGER PRIMARY KEY,
   applied_at TEXT NOT NULL
@@ -171,12 +196,23 @@ CREATE INDEX IF NOT EXISTS idx_events_kind        ON events(kind);
 CREATE INDEX IF NOT EXISTS idx_hypotheses_status  ON hypotheses(status);
 CREATE INDEX IF NOT EXISTS idx_experiments_hyp    ON experiments(hypothesis_id);
 CREATE INDEX IF NOT EXISTS idx_errors_ts          ON errors(ts);
+CREATE INDEX IF NOT EXISTS idx_mevents_subject    ON memory_events(subject_id);
+CREATE INDEX IF NOT EXISTS idx_mevents_kind       ON memory_events(kind);
+CREATE INDEX IF NOT EXISTS idx_mevents_ts         ON memory_events(ts);
 """
 
 # Columns added since the bash-era schema. Applied to pre-existing base tables
 # so the package can open and migrate an older database forward in place.
 _ADDED_COLUMNS: dict[str, dict[str, str]] = {
-    "learnings": {"session_id": "TEXT", "hypothesis_id": "TEXT"},
+    "learnings": {
+        "session_id": "TEXT",
+        "hypothesis_id": "TEXT",
+        "source_db": "TEXT",
+        "source_row_id": "TEXT",
+        "import_batch_id": "TEXT",
+        "archived_at": "TEXT",
+        "archived_reason": "TEXT",
+    },
     "context": {
         "session_id": "TEXT",
         "kind": "TEXT",
@@ -190,7 +226,7 @@ _ADDED_COLUMNS: dict[str, dict[str, str]] = {
 
 # Columns the package writes into and therefore requires. If a table pre-exists
 # missing one of these and it can't be added by migration, the file was built by
-# something else with an incompatible shape — refuse rather than corrupt it.
+# something else with an incompatible shape, refuse rather than corrupt it.
 _REQUIRED_COLUMNS: dict[str, set[str]] = {
     "sessions": {"id", "started_at", "ended_at", "task", "tier", "agent", "success", "outcome", "tokens_used"},
     "events": {"id", "ts", "session_id", "kind", "ref_id", "data"},
