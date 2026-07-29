@@ -26,7 +26,11 @@ classifiers = [
 dependencies = []
 
 [project.urls]
-Homepage = "https://github.com/ariaxhan/metabrain"
+# Homepage points at the author site, not the repo. PyPI project pages carry
+# real authority and every link here went to GitHub, so the domain the work is
+# actually published under got nothing back.
+Homepage = "https://ariaxhan.com"
+Documentation = "https://ariaxhan.com/projects/metabrain/"
 Repository = "https://github.com/ariaxhan/metabrain"
 Issues = "https://github.com/ariaxhan/metabrain/issues"
 
