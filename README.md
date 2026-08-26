@@ -22,6 +22,8 @@ command = "metabrain-mcp"
 args = ["--db", "./agent.db"]
 ```
 
+Gemini CLI: `gemini extensions install https://github.com/ariaxhan/metabrain`.
+
 Full agent-facing reference (tools, exact argument names, a three-call example, and when
 not to use this): [llms.txt](llms.txt).
 
