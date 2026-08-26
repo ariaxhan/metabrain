@@ -189,6 +189,8 @@ args = ["--db", "./agent.db"]
 | `stats()` | `stats()` |
 | `capture_error(tool, error, context?)` | `capture_error()` |
 
+Or in Docker, with the database on a mounted volume: `docker run -i --rm -v metabrain:/data mcp/metabrain` (`METABRAIN_DB` overrides the default `/data/agent.db`).
+
 The core package stays zero-dependency; the `mcp` SDK arrives only with the extra, and works on both `mcp` 1.x and 2.x.
 
 ## Development
