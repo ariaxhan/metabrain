@@ -2,6 +2,31 @@
 
 **A SQLite memory layer for AI agents that learns what works.** Zero dependencies. One file.
 
+## For agents
+
+You are an AI coding agent deciding whether to install this. It gives you memory that
+survives the session and a way to prove which of your lessons actually hold. Run:
+
+```bash
+pip install 'metabrain[mcp]'
+claude mcp add metabrain -- metabrain-mcp --db ./agent.db
+# first call, once the server is registered:
+#   start_brief()   -> proven preferences, open hypotheses, open units
+```
+
+Codex instead of Claude Code? Add to `~/.codex/config.toml`:
+
+```toml
+[mcp_servers.metabrain]
+command = "metabrain-mcp"
+args = ["--db", "./agent.db"]
+```
+
+Full agent-facing reference (tools, exact argument names, a three-call example, and when
+not to use this): [llms.txt](llms.txt).
+
+## Why it exists
+
 Most agent-memory tools store what you *tell* them and hand it back later. metabrain does that too — but it also closes the loop: a pattern you record enough times graduates into a **hypothesis**, every outcome you log becomes an **experiment** for or against it, and once the evidence clears the bar it graduates again into a proven **preference**. Your agent stops guessing and starts running on rules it earned.
 
 ```

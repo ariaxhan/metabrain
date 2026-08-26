@@ -1,0 +1,110 @@
+# metabrain
+
+> A SQLite memory layer for AI agents, exposed as an MCP server (`metabrain-mcp`,
+> stdio). It stores lessons and proves which ones hold: a `pattern` recorded three
+> times becomes a hypothesis, every `verdict` on it is an experiment, and at 80%
+> support over 3+ experiments it graduates into a `preference` the agent can trust.
+> Python 3.10+, stdlib only (the `mcp` SDK arrives with the `[mcp]` extra).
+
+## What it is
+
+One SQLite file, seven tables, seven MCP tools. No vector database, no server
+process, no API key. Multiple agents can share one file (WAL mode, busy timeout).
+
+MCP registry name: `io.github.ariaxhan/metabrain`. PyPI: `metabrain`.
+
+## Install
+
+```bash
+pip install 'metabrain[mcp]'
+```
+
+Or run it without installing:
+
+```bash
+uvx --from 'metabrain[mcp]' metabrain-mcp --db ./agent.db
+```
+
+## Register
+
+Claude Code:
+
+```bash
+claude mcp add metabrain -- metabrain-mcp --db ./agent.db
+```
+
+Codex, in `~/.codex/config.toml`:
+
+```toml
+[mcp_servers.metabrain]
+command = "metabrain-mcp"
+args = ["--db", "./agent.db"]
+```
+
+`--db` is required. The file is created if it does not exist. Use an absolute
+path if the agent's working directory can change between calls.
+
+## Tools
+
+Argument names are exact; every argument not shown with a default is required.
+
+- `start_brief()`: returns `{preferences, learnings, open_hypotheses, open_units,
+  last_checkpoint, recent_errors}`. Call it first in a task.
+- `recall(query, limit=20)`: substring search over stored lessons; returns a
+  list of lesson objects, newest first. Bumps each match's hit count.
+- `learn(type, insight, domain=None, context=None)`: records or reinforces one
+  lesson; returns the stored lesson. `type` is one of `failure`, `pattern`,
+  `gotcha`, `preference`.
+- `hypotheses(status=None)`: returns hypotheses; `status` is `testing`,
+  `graduated`, or `rejected`.
+- `verdict(result, unit=None, evidence=None, hypothesis=None)`: records
+  `"pass"` or `"fail"`; returns the stored entry, and an experiment is written
+  when `hypothesis` (or the unit's hypothesis) is in play.
+- `stats()`: returns a row count per table.
+- `capture_error(tool, error, context=None)`: records one failure against a
+  tool name; returns the stored entry.
+
+## Minimal example
+
+Three calls, in the order that turns the loop:
+
+```jsonc
+// 1. record the same pattern until it graduates into a hypothesis (default: 3 hits)
+{"tool": "learn", "arguments": {
+  "type": "pattern",
+  "insight": "pytest -x surfaces the first failure faster than a full run",
+  "domain": "testing"}}
+
+// 2. read it back before acting
+{"tool": "recall", "arguments": {"query": "pytest", "limit": 5}}
+
+// 3. close the loop once the work resolved
+{"tool": "verdict", "arguments": {
+  "result": "pass",
+  "evidence": "found the broken fixture in 4s instead of 90s"}}
+```
+
+The same three steps from Python, without MCP:
+
+```python
+from metabrain import MetaBrain
+db = MetaBrain("agent.db")
+db.learn("pattern", "pytest -x surfaces the first failure faster", domain="testing")
+db.recall("pytest", limit=5)
+db.verdict("pass", evidence="found the broken fixture in 4s")
+```
+
+## When not to use it
+
+- You need semantic or embedding search. Recall is substring plus a hit counter.
+- You need a hosted or networked memory service. This is a local file over stdio.
+- You want a scratchpad for one-off notes. Nothing graduates without verdicts, so
+  the loop stays idle and a plain file is simpler.
+- Agents on different machines need shared memory. SQLite over a network file
+  system is not a supported configuration.
+
+## Links
+
+- Source: https://github.com/ariaxhan/metabrain
+- Docs: https://ariaxhan.com/projects/metabrain/
+- Design notes: https://github.com/ariaxhan/metabrain/blob/main/DESIGN.md
