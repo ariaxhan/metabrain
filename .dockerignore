@@ -1,0 +1,12 @@
+.git
+.github
+.venv
+.obsidian
+.pytest_cache
+__pycache__
+*.pyc
+_meta
+graphify-out
+dist
+build
+*.egg-info
