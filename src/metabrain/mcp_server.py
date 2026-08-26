@@ -97,7 +97,8 @@ def _db() -> MetaBrain:
 
 
 def recall(query: str, limit: int = 20) -> list[dict[str, Any]]:
-    """Search stored lessons by substring and return the matches, newest first."""
+    """Search stored lessons for the substring `query` and return up to `limit`
+    matching lesson objects, newest first."""
     return [asdict(item) for item in _db().recall(query, limit=limit)]
 
 
@@ -107,14 +108,17 @@ def learn(
     domain: str | None = None,
     context: str | None = None,
 ) -> dict[str, Any]:
-    """Record or reinforce a durable lesson of type failure, pattern, gotcha, or preference."""
+    """Record or reinforce one lesson from `type` (failure, pattern, gotcha, or
+    preference), `insight`, and optional `domain` and `context`, returning the
+    stored lesson."""
     if type not in _LEARNING_TYPES:
         raise ValueError(f"type must be one of {list(LEARNING_TYPES)}, got {type!r}")
     return asdict(_db().learn(type, insight, domain=domain, evidence=context))
 
 
 def hypotheses(status: str | None = None) -> list[dict[str, Any]]:
-    """List hypotheses under test, optionally filtered to testing, graduated, or rejected."""
+    """List hypothesis objects, optionally filtered by `status` (testing,
+    graduated, or rejected)."""
     return [asdict(item) for item in _db().hypotheses(status=status)]
 
 
@@ -124,24 +128,29 @@ def verdict(
     evidence: str | None = None,
     hypothesis: str | None = None,
 ) -> dict[str, Any]:
-    """Record a pass or fail outcome, which becomes an experiment when a hypothesis is in play."""
+    """Record `result` ("pass" or "fail") against an optional `unit` or
+    `hypothesis` with optional `evidence`, and return the stored entry (an
+    experiment is written when a hypothesis is in play)."""
     return asdict(
         _db().verdict(result, unit=unit, hypothesis=hypothesis, evidence=evidence)
     )
 
 
 def start_brief() -> dict[str, Any]:
-    """Return the what-to-know digest: proven preferences first, then open work."""
+    """Return the start-of-task digest (preferences, learnings, open_hypotheses,
+    open_units, last_checkpoint, recent_errors), taking no arguments."""
     return asdict(_db().read_start())
 
 
 def stats() -> dict[str, int]:
-    """Return the row count of every metabrain table, a quick health check."""
+    """Return a mapping of every metabrain table name to its row count, taking no
+    arguments."""
     return _db().stats()
 
 
 def capture_error(tool: str, error: str, context: str | None = None) -> dict[str, Any]:
-    """Record a failure against a tool name so it can be diagnosed later."""
+    """Record a failure from `tool` name, `error` text, and optional `context`,
+    returning the stored error entry."""
     return asdict(_db().capture_error(tool, error, context=context))
 
 
