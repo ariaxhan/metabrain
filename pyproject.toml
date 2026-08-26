@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "metabrain"
-version = "1.0.0"
+version = "1.1.0"
 description = "A zero-dependency SQLite memory layer for AI agents that learns what works: patterns graduate to proven preferences via a built-in experiment loop."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -34,14 +34,31 @@ Documentation = "https://ariaxhan.com/projects/metabrain/"
 Repository = "https://github.com/ariaxhan/metabrain"
 Issues = "https://github.com/ariaxhan/metabrain/issues"
 
+[project.scripts]
+metabrain-mcp = "metabrain.mcp_server:main"
+
 [project.optional-dependencies]
 dev = ["pytest>=7.0"]
+# The MCP server (`metabrain-mcp`) is opt-in: the core stays zero-dependency.
+mcp = ["mcp>=1.2"]
 # Reserved for an opt-in semantic-recall backend. The core stays zero-dependency;
 # the moat is the learn → prove → graduate loop, not embedding search.
 embeddings = []
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/metabrain"]
+
+# Explicit list, not "everything unignored": a stray local directory must never
+# be able to leak a machine path into a published sdist.
+[tool.hatch.build.targets.sdist]
+include = [
+  "src/metabrain",
+  "tests",
+  "README.md",
+  "DESIGN.md",
+  "LICENSE",
+  "pyproject.toml",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
