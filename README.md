@@ -133,6 +133,37 @@ Built for multiple agents sharing one file. SQLite runs in WAL mode with a busy 
 
 It can open and migrate an older metabrain / base-schema database (learnings, context, errors) forward in place. A database created by a different tool whose `events`/`hypotheses`/`experiments` tables have an incompatible shape is detected on open and rejected with a clear `IncompatibleDatabaseError`, rather than corrupting it.
 
+## Use as an MCP server
+
+Point Claude Code, Codex, or any MCP client at a metabrain file and the loop runs from inside the agent — no glue code.
+
+```bash
+pip install 'metabrain[mcp]'
+claude mcp add metabrain -- metabrain-mcp --db ./agent.db
+```
+
+Codex, in `~/.codex/config.toml`:
+
+```toml
+[mcp_servers.metabrain]
+command = "metabrain-mcp"
+args = ["--db", "./agent.db"]
+```
+
+`metabrain-mcp` speaks stdio, opens one shared `MetaBrain` on the `--db` path, and closes it on exit. Seven tools, thin wrappers over the library:
+
+| Tool | Calls |
+| --- | --- |
+| `start_brief()` | `read_start()` — proven preferences first; run it before you work |
+| `recall(query, limit=20)` | `recall()` |
+| `learn(type, insight, domain?, context?)` | `learn()`; `type` is `failure` / `pattern` / `gotcha` / `preference` |
+| `hypotheses(status?)` | `hypotheses()` |
+| `verdict(result, unit?, evidence?, hypothesis?)` | `verdict()` — closes the loop |
+| `stats()` | `stats()` |
+| `capture_error(tool, error, context?)` | `capture_error()` |
+
+The core package stays zero-dependency; the `mcp` SDK arrives only with the extra, and works on both `mcp` 1.x and 2.x.
+
 ## Development
 
 ```bash
