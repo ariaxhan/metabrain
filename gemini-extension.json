@@ -1,0 +1,12 @@
+{
+  "name": "metabrain",
+  "version": "1.1.2",
+  "description": "Persistent memory for coding agents: store lessons in one SQLite file, recall them by search, and let the ones that prove out graduate into trusted preferences.",
+  "contextFileName": "llms.txt",
+  "mcpServers": {
+    "metabrain": {
+      "command": "uvx",
+      "args": ["--from", "metabrain[mcp]", "metabrain-mcp", "--db", "./agent.db"]
+    }
+  }
+}
