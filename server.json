@@ -1,0 +1,45 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.ariaxhan/metabrain",
+  "title": "metabrain",
+  "description": "SQLite memory for AI agents: patterns graduate into proven preferences via an experiment loop.",
+  "version": "1.1.1",
+  "repository": {
+    "url": "https://github.com/ariaxhan/metabrain",
+    "source": "github"
+  },
+  "packages": [
+    {
+      "registryType": "pypi",
+      "registryBaseUrl": "https://pypi.org",
+      "identifier": "metabrain",
+      "version": "1.1.1",
+      "runtimeHint": "uvx",
+      "runtimeArguments": [
+        {
+          "type": "named",
+          "name": "--from",
+          "value": "metabrain[mcp]"
+        },
+        {
+          "type": "positional",
+          "valueHint": "command",
+          "value": "metabrain-mcp"
+        }
+      ],
+      "packageArguments": [
+        {
+          "type": "named",
+          "name": "--db",
+          "description": "Path to the metabrain SQLite file. Created if it does not exist.",
+          "format": "filepath",
+          "isRequired": true,
+          "placeholder": "./agent.db"
+        }
+      ],
+      "transport": {
+        "type": "stdio"
+      }
+    }
+  ]
+}

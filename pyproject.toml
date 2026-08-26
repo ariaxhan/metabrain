@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "metabrain"
-version = "1.1.0"
+version = "1.1.1"
 description = "A zero-dependency SQLite memory layer for AI agents that learns what works: patterns graduate to proven preferences via a built-in experiment loop."
 readme = "README.md"
 requires-python = ">=3.10"
