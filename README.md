@@ -135,6 +135,8 @@ It can open and migrate an older metabrain / base-schema database (learnings, co
 
 ## Use as an MCP server
 
+<!-- mcp-name: io.github.ariaxhan/metabrain -->
+
 Point Claude Code, Codex, or any MCP client at a metabrain file and the loop runs from inside the agent — no glue code.
 
 ```bash
